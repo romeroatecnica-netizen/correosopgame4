@@ -6,6 +6,7 @@ import { HeaderNav } from './components/HeaderNav';
 import { LearningPath } from './components/LearningPath';
 import { QuizRunner } from './components/QuizRunner';
 import { MidContentAdSlot, SeoAndMonetization } from './components/SeoAndMonetization';
+import { syncHeadSeo } from './config/seo';
 import { QUESTION_BANK } from './data/questions';
 import { SyllabusAndCalculator } from './components/SyllabusAndCalculator';
 import {
@@ -49,6 +50,11 @@ export default function App() {
   const [incomingChallenge, setIncomingChallenge] = useState<SharedChallenge | null>(() =>
     decodeChallengeFromUrl()
   );
+
+  // Sync canonical, hreflang, and og:url with CANONICAL_ORIGIN
+  useEffect(() => {
+    syncHeadSeo();
+  }, [activeMode]);
 
   // Sync incoming challenge specialty/mode on initial load if present
   useEffect(() => {
@@ -229,8 +235,8 @@ export default function App() {
     try {
       await navigator.clipboard.writeText(url);
     } catch {
-      // Fallback: update URL bar silently if clipboard blocked
-      window.history.replaceState({}, '', url);
+      // Fallback: update URL bar with relative query if clipboard is blocked
+      window.history.replaceState({}, '', new URL(url).search);
     }
     setShareCopied(true);
     window.setTimeout(() => setShareCopied(false), 2600);

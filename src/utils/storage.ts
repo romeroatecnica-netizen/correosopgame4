@@ -1,3 +1,4 @@
+import { CANONICAL_ORIGIN } from '../config/seo';
 import { MainMode, SharedChallenge, Specialty, TopicKey, UserProgress } from '../types/opgame';
 
 const STORAGE_KEY = 'correos_opgame_iv_v1';
@@ -103,7 +104,7 @@ export function encodeChallengeUrl(challenge: SharedChallenge): string {
     binary += String.fromCharCode(bytes[i]);
   }
   const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const url = new URL(window.location.href);
+  const url = new URL('/', CANONICAL_ORIGIN);
   url.searchParams.set('reto', encoded);
   return url.toString();
 }
