@@ -1,29 +1,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Trophy, X } from 'lucide-react';
+import { Play, Swords, X } from 'lucide-react';
+import { ChallengeModal } from './components/ChallengeModal';
 import { ErrorClinic } from './components/ErrorClinic';
 import { ExamSimulator } from './components/ExamSimulator';
 import { HeaderNav } from './components/HeaderNav';
 import { LearningPath } from './components/LearningPath';
-import { QuizRunner } from './components/QuizRunner';
+import { QuizChallengeContext, QuizRunner } from './components/QuizRunner';
 import { MidContentAdSlot, SeoAndMonetization } from './components/SeoAndMonetization';
+import { SyllabusAndCalculator } from './components/SyllabusAndCalculator';
 import { syncHeadSeo } from './config/seo';
 import { QUESTION_BANK } from './data/questions';
-import { SyllabusAndCalculator } from './components/SyllabusAndCalculator';
+import { OFFICIAL_TOPICS } from './data/topics';
 import {
-  buildErrorHuntQuestions,
-  buildTimeAttackQuestions,
-  buildTopicLessonQuestions,
-} from './utils/quizBuilder';
-import {
-  calculateTopicLevel,
-  decodeChallengeFromUrl,
-  encodeChallengeUrl,
-  getTodayISO,
-  loadProgress,
-  saveProgress,
-  updateStreakOnActivity,
-} from './utils/storage';
-import {
+  ChallengeFormat,
+  ChallengeHistoryItem,
   ExamHistoryItem,
   MainMode,
   MinigameType,
@@ -33,12 +23,29 @@ import {
   TopicKey,
   UserProgress,
 } from './types/opgame';
+import {
+  buildChallengeDeck,
+  buildErrorHuntQuestions,
+  buildTimeAttackQuestions,
+  buildTopicLessonQuestions,
+  CHALLENGE_FORMATS,
+} from './utils/quizBuilder';
+import {
+  calculateTopicLevel,
+  decodeChallengeFromUrl,
+  formatMinutesSeconds,
+  getTodayISO,
+  loadProgress,
+  saveProgress,
+  updateStreakOnActivity,
+} from './utils/storage';
 
 interface ActiveQuizState {
   id: number;
   type: MinigameType;
   topicId?: TopicKey;
   questions: Question[];
+  challengeContext?: QuizChallengeContext;
 }
 
 export default function App() {
@@ -46,7 +53,7 @@ export default function App() {
   const [activeMode, setActiveMode] = useState<MainMode>('ruta');
   const [activeQuiz, setActiveQuiz] = useState<ActiveQuizState | null>(null);
   const [isExamRunning, setIsExamRunning] = useState(false);
-  const [shareCopied, setShareCopied] = useState(false);
+  const [challengeModalOpen, setChallengeModalOpen] = useState(false);
   const [incomingChallenge, setIncomingChallenge] = useState<SharedChallenge | null>(() =>
     decodeChallengeFromUrl()
   );
@@ -96,6 +103,9 @@ export default function App() {
       deck = buildTimeAttackQuestions(progress.selectedSpecialty, 30);
     } else if (type === 'cazaerror') {
       deck = buildErrorHuntQuestions(progress.selectedSpecialty, 8);
+    } else if (type === 'fallos') {
+      const failedIds = new Set(Object.keys(progress.mistakes));
+      deck = QUESTION_BANK.filter((q) => failedIds.has(q.id));
     }
 
     setActiveMode('ruta');
@@ -104,6 +114,54 @@ export default function App() {
       type,
       topicId,
       questions: deck,
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handlePlayNewChallenge = (config: {
+    format: ChallengeFormat;
+    topicId?: TopicKey;
+    seed: string;
+    specialty: Specialty;
+  }) => {
+    const meta = CHALLENGE_FORMATS.find((f) => f.id === config.format) ?? CHALLENGE_FORMATS[0];
+    const deck = buildChallengeDeck(config.format, config.specialty, config.seed, config.topicId);
+    setActiveMode('ruta');
+    setActiveQuiz({
+      id: Date.now(),
+      type: meta.minigameType,
+      topicId: config.topicId,
+      questions: deck,
+      challengeContext: {
+        kind: 'creating',
+        format: config.format,
+        seed: config.seed,
+        topicId: config.topicId,
+        specialty: config.specialty,
+        playerName: progress.playerName,
+        playerXp: progress.xp,
+        playerStreak: progress.streakDays,
+      },
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleAcceptIncomingChallenge = (challenge: SharedChallenge) => {
+    const meta = CHALLENGE_FORMATS.find((f) => f.id === challenge.format) ?? CHALLENGE_FORMATS[0];
+    const deck = buildChallengeDeck(challenge.format, challenge.specialty, challenge.seed, challenge.topicId);
+    setActiveMode('ruta');
+    setActiveQuiz({
+      id: Date.now(),
+      type: meta.minigameType,
+      topicId: challenge.topicId,
+      questions: deck,
+      challengeContext: {
+        kind: 'accepting',
+        incoming: challenge,
+        playerName: progress.playerName,
+        playerXp: progress.xp,
+        playerStreak: progress.streakDays,
+      },
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -131,7 +189,6 @@ export default function App() {
         };
 
         const nextMistakes = { ...prev.mistakes };
-        // Do not store temporary generated hunt-* IDs in Error Clinic unless mapped; store standard question IDs
         const baseId = question.id.startsWith('hunt-') ? question.id.split('-').slice(1, -1).join('-') : question.id;
 
         if (!isCorrect) {
@@ -146,8 +203,11 @@ export default function App() {
           delete nextMistakes[baseId];
         }
 
+        const isChallengeSession = Boolean(activeQuiz?.challengeContext);
         const nextHearts =
-          !isCorrect && !prev.practiceNoHeartsLoss && !isClinicReview ? Math.max(0, prev.hearts - 1) : prev.hearts;
+          !isCorrect && !prev.practiceNoHeartsLoss && !isClinicReview && !isChallengeSession
+            ? Math.max(0, prev.hearts - 1)
+            : prev.hearts;
 
         return {
           ...prev,
@@ -160,31 +220,89 @@ export default function App() {
         };
       });
     },
-    [updateProgress]
+    [updateProgress, activeQuiz?.challengeContext]
   );
 
   const handleSessionComplete = useCallback(
-    (summary: { correct: number; total: number; xpEarned: number; topicId?: TopicKey }) => {
-      if (!summary.topicId) return;
+    (summary: { correct: number; total: number; xpEarned: number; durationSeconds: number; topicId?: TopicKey }) => {
+      const challengeCtx = activeQuiz?.challengeContext;
+
       updateProgress((prev) => {
-        const key = String(summary.topicId);
-        const curr = prev.topics[key] ?? {
-          xp: 0,
-          level: 1,
-          completedSessions: 0,
-          correctCount: 0,
-          attemptCount: 0,
-        };
-        return {
-          ...prev,
-          topics: {
+        let nextTopics = prev.topics;
+        if (summary.topicId) {
+          const key = String(summary.topicId);
+          const curr = prev.topics[key] ?? {
+            xp: 0,
+            level: 1,
+            completedSessions: 0,
+            correctCount: 0,
+            attemptCount: 0,
+          };
+          nextTopics = {
             ...prev.topics,
             [key]: { ...curr, completedSessions: curr.completedSessions + 1 },
-          },
+          };
+        }
+
+        let nextChallengeHistory = prev.challengeHistory;
+        if (challengeCtx?.kind === 'creating') {
+          const item: ChallengeHistoryItem = {
+            id: `ch-${Date.now()}`,
+            date: new Date().toISOString(),
+            seed: challengeCtx.seed,
+            format: challengeCtx.format,
+            specialty: challengeCtx.specialty,
+            topicId: challengeCtx.topicId,
+            myCorrect: summary.correct,
+            myTotal: summary.total,
+            myTimeSec: summary.durationSeconds,
+            outcome: 'sent',
+          };
+          nextChallengeHistory = [item, ...prev.challengeHistory].slice(0, 20);
+        } else if (challengeCtx?.kind === 'accepting') {
+          const inc = challengeCtx.incoming;
+          let outcome: ChallengeHistoryItem['outcome'] = 'win';
+          if (inc.challengerCorrect !== undefined) {
+            if (summary.correct > inc.challengerCorrect) outcome = 'win';
+            else if (summary.correct < inc.challengerCorrect) outcome = 'loss';
+            else if (inc.challengerTimeSec !== undefined) {
+              outcome =
+                summary.durationSeconds < inc.challengerTimeSec
+                  ? 'win'
+                  : summary.durationSeconds > inc.challengerTimeSec
+                    ? 'loss'
+                    : 'tie';
+            } else {
+              outcome = 'tie';
+            }
+          }
+          const item: ChallengeHistoryItem = {
+            id: `ch-${Date.now()}`,
+            date: new Date().toISOString(),
+            seed: inc.seed,
+            format: inc.format,
+            specialty: inc.specialty,
+            topicId: inc.topicId,
+            myCorrect: summary.correct,
+            myTotal: summary.total,
+            myTimeSec: summary.durationSeconds,
+            opponentName: inc.challengerName,
+            opponentCorrect: inc.challengerCorrect,
+            opponentTotal: inc.challengerTotal,
+            opponentTimeSec: inc.challengerTimeSec,
+            outcome,
+          };
+          nextChallengeHistory = [item, ...prev.challengeHistory].slice(0, 20);
+        }
+
+        return {
+          ...prev,
+          topics: nextTopics,
+          challengeHistory: nextChallengeHistory,
         };
       });
     },
-    [updateProgress]
+    [updateProgress, activeQuiz?.challengeContext]
   );
 
   const handleRecordExamResult = useCallback(
@@ -217,30 +335,17 @@ export default function App() {
     [updateProgress]
   );
 
-  const handleShareChallenge = async () => {
-    const bestScore =
-      progress.examHistory.length > 0
-        ? Math.max(...progress.examHistory.map((h) => h.testScore))
-        : undefined;
-
-    const url = encodeChallengeUrl({
-      mode: activeMode,
-      specialty: progress.selectedSpecialty,
-      topicId: activeQuiz?.topicId,
-      challengerXp: progress.xp,
-      challengerStreak: progress.streakDays,
-      challengerBestScore: bestScore,
-    });
-
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      // Fallback: update URL bar with relative query if clipboard is blocked
-      window.history.replaceState({}, '', new URL(url).search);
-    }
-    setShareCopied(true);
-    window.setTimeout(() => setShareCopied(false), 2600);
-  };
+  const incomingFormatLabel = incomingChallenge
+    ? CHALLENGE_FORMATS.find((f) => f.id === incomingChallenge.format)?.label ?? 'Duelo mixto'
+    : '';
+  const incomingTopicLabel =
+    incomingChallenge?.topicId !== undefined
+      ? incomingChallenge.topicId === 'psico'
+        ? 'Psicotécnicos'
+        : `Tema ${incomingChallenge.topicId}: ${
+            OFFICIAL_TOPICS.find((t) => t.id === incomingChallenge.topicId)?.shortTitle ?? ''
+          }`
+      : null;
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-slate-900">
@@ -258,40 +363,70 @@ export default function App() {
             hearts: prev.hearts === 0 ? 5 : prev.hearts,
           }))
         }
-        onShareChallenge={handleShareChallenge}
-        shareCopied={shareCopied}
+        onOpenChallengeModal={() => setChallengeModalOpen(true)}
         isFocusActive={isFocusActive}
       />
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        {/* Shared Challenge Banner decoded from URL */}
+        {/* Incoming Challenge Invitation Banner decoded from ?reto=... */}
         {incomingChallenge && !isFocusActive && (
-          <div className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3 text-sm text-slate-800">
-              <Trophy className="w-5 h-5 text-[#1D4ED8] shrink-0" />
-              <p>
-                <strong>Reto compartido de CorreosOpGame IV:</strong> Puesto{' '}
-                <strong>{incomingChallenge.specialty}</strong> · Tu retador acumula{' '}
-                <strong className="tabular-nums">{incomingChallenge.challengerXp} XP</strong> y{' '}
-                <strong className="tabular-nums">{incomingChallenge.challengerStreak}</strong> días de racha
-                {incomingChallenge.challengerBestScore !== undefined
-                  ? ` (mejor test: ${incomingChallenge.challengerBestScore.toFixed(2)}/60)`
-                  : ''}
-                .
-              </p>
+          <section className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-10 h-10 rounded-lg bg-[#1D4ED8] text-amber-300 flex items-center justify-center shrink-0">
+                <Swords className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-[#1D4ED8]">
+                  Invitación a duelo · Semilla #{incomingChallenge.seed} · Puesto {incomingChallenge.specialty}
+                </p>
+                <h2 className="font-display text-base sm:text-lg font-bold text-slate-900">
+                  {incomingChallenge.challengerName} te reta en {incomingFormatLabel}
+                  {incomingTopicLabel ? ` (${incomingTopicLabel})` : ''}
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-700 tabular-nums">
+                  {incomingChallenge.challengerCorrect !== undefined ? (
+                    <>
+                      Marca a batir:{' '}
+                      <strong>
+                        {incomingChallenge.challengerCorrect}/{incomingChallenge.challengerTotal ?? '?'} aciertos
+                      </strong>
+                      {incomingChallenge.challengerTimeSec !== undefined
+                        ? ` en ${formatMinutesSeconds(incomingChallenge.challengerTimeSec)}`
+                        : ''}
+                      .
+                    </>
+                  ) : (
+                    <>
+                      Mismo mazo de preguntas garantizado por semilla. Nivel del retador: {incomingChallenge.challengerXp}{' '}
+                      XP · {incomingChallenge.challengerStreak}d racha.
+                    </>
+                  )}
+                </p>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setIncomingChallenge(null)}
-              className="p-1 text-slate-500 hover:text-slate-900"
-              aria-label="Cerrar aviso de reto"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+
+            <div className="flex items-center gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleAcceptIncomingChallenge(incomingChallenge)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#1D4ED8] hover:bg-[#1E3A8A] text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>Aceptar y jugar este reto</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncomingChallenge(null)}
+                className="p-2 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-blue-100/60"
+                aria-label="Cerrar invitación de reto"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </section>
         )}
 
-        {/* Active Quiz Runner (Duolingo-style lesson / minigame) */}
+        {/* Active Quiz Runner (Duolingo-style lesson / minigame / peer link challenge) */}
         {activeQuiz ? (
           <QuizRunner
             key={activeQuiz.id}
@@ -300,6 +435,7 @@ export default function App() {
             questions={activeQuiz.questions}
             hearts={progress.hearts}
             practiceNoHeartsLoss={progress.practiceNoHeartsLoss}
+            challengeContext={activeQuiz.challengeContext}
             onAnswerResult={handleAnswerResult}
             onSessionComplete={handleSessionComplete}
             onExit={() => setActiveQuiz(null)}
@@ -308,6 +444,7 @@ export default function App() {
               setActiveMode('clinica');
             }}
             onRestart={() => handleStartMinigame(activeQuiz.type, activeQuiz.topicId)}
+            onLaunchCounterChallenge={(cfg) => handlePlayNewChallenge(cfg)}
           />
         ) : activeMode === 'ruta' ? (
           <LearningPath
@@ -320,6 +457,7 @@ export default function App() {
               handleStartMinigame(type, topicId);
             }}
             onGoToExam={() => handleSelectMode('simulacro')}
+            onOpenChallengeModal={() => setChallengeModalOpen(true)}
             onRestoreHearts={() => updateProgress((prev) => ({ ...prev, hearts: 5 }))}
           />
         ) : activeMode === 'simulacro' ? (
@@ -363,6 +501,14 @@ export default function App() {
           onGoToExam={() => handleSelectMode('simulacro')}
         />
       </main>
+
+      <ChallengeModal
+        isOpen={challengeModalOpen}
+        progress={progress}
+        onClose={() => setChallengeModalOpen(false)}
+        onUpdatePlayerName={(name) => updateProgress((prev) => ({ ...prev, playerName: name }))}
+        onPlayNewChallenge={handlePlayNewChallenge}
+      />
 
       <footer className="no-print border-t border-slate-200 bg-white mt-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">

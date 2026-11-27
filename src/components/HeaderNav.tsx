@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import {
   BookOpen,
-  Check,
   ClipboardCheck,
   Compass,
   Flame,
   Heart,
   Infinity as InfinityIcon,
-  Share2,
   Stethoscope,
+  Swords,
   Trophy,
 } from 'lucide-react';
 import { MainMode, Specialty, UserProgress } from '../types/opgame';
@@ -20,8 +19,7 @@ interface HeaderNavProps {
   progress: UserProgress;
   onChangeSpecialty: (specialty: Specialty) => void;
   onTogglePracticeMode: () => void;
-  onShareChallenge: () => void;
-  shareCopied: boolean;
+  onOpenChallengeModal: () => void;
   isFocusActive: boolean;
 }
 
@@ -38,8 +36,7 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
   progress,
   onChangeSpecialty,
   onTogglePracticeMode,
-  onShareChallenge,
-  shareCopied,
+  onOpenChallengeModal,
   isFocusActive,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -110,11 +107,11 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
         <div className="flex items-center gap-2.5 shrink-0">
           <button
             type="button"
-            onClick={onShareChallenge}
+            onClick={onOpenChallengeModal}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-[#1D4ED8] text-white hover:bg-[#1E3A8A] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-blue-600"
           >
-            {shareCopied ? <Check className="w-4 h-4 text-amber-300" /> : <Share2 className="w-4 h-4" />}
-            <span>{shareCopied ? 'Enlace copiado' : 'Compartir reto'}</span>
+            <Swords className="w-4 h-4 text-amber-300" />
+            <span>Retar por enlace</span>
           </button>
 
           {!isFocusActive && (

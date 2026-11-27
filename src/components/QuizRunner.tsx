@@ -2,18 +2,50 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
   CheckCircle2,
+  Copy,
   Flame,
   Heart,
   Infinity as InfinityIcon,
   RotateCcw,
+  Shuffle,
   Stethoscope,
+  Swords,
   Timer,
   Trophy,
   XCircle,
 } from 'lucide-react';
 import { OFFICIAL_TOPICS } from '../data/topics';
-import { MinigameType, Question, TopicKey } from '../types/opgame';
+import {
+  ChallengeFormat,
+  MinigameType,
+  Question,
+  SharedChallenge,
+  Specialty,
+  TopicKey,
+} from '../types/opgame';
+import { CHALLENGE_FORMATS, pickNextVariedChallenge } from '../utils/quizBuilder';
+import { encodeChallengeUrl, formatMinutesSeconds } from '../utils/storage';
+
+export type QuizChallengeContext =
+  | {
+      kind: 'creating';
+      format: ChallengeFormat;
+      seed: string;
+      topicId?: TopicKey;
+      specialty: Specialty;
+      playerName: string;
+      playerXp: number;
+      playerStreak: number;
+    }
+  | {
+      kind: 'accepting';
+      incoming: SharedChallenge;
+      playerName: string;
+      playerXp: number;
+      playerStreak: number;
+    };
 
 interface QuizRunnerProps {
   modeType: MinigameType;
@@ -21,11 +53,24 @@ interface QuizRunnerProps {
   questions: Question[];
   hearts: number;
   practiceNoHeartsLoss: boolean;
+  challengeContext?: QuizChallengeContext;
   onAnswerResult: (question: Question, isCorrect: boolean, xpEarned: number, isClinicReview: boolean) => void;
-  onSessionComplete: (summary: { correct: number; total: number; xpEarned: number; topicId?: TopicKey }) => void;
+  onSessionComplete: (summary: {
+    correct: number;
+    total: number;
+    xpEarned: number;
+    durationSeconds: number;
+    topicId?: TopicKey;
+  }) => void;
   onExit: () => void;
   onGoToClinic: () => void;
   onRestart: () => void;
+  onLaunchCounterChallenge?: (config: {
+    format: ChallengeFormat;
+    topicId?: TopicKey;
+    seed: string;
+    specialty: Specialty;
+  }) => void;
 }
 
 const LETTERS = ['A', 'B', 'C', 'D'] as const;
@@ -36,11 +81,13 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
   questions,
   hearts,
   practiceNoHeartsLoss,
+  challengeContext,
   onAnswerResult,
   onSessionComplete,
   onExit,
   onGoToClinic,
   onRestart,
+  onLaunchCounterChallenge,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -50,24 +97,48 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
   const [answeredCount, setAnsweredCount] = useState(0);
   const [combo, setCombo] = useState(0);
   const [timeLeft, setTimeLeft] = useState(modeType === 'contrarreloj' ? 60 : 0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [finished, setFinished] = useState(false);
   const [outOfHearts, setOutOfHearts] = useState(false);
   const [missedIds, setMissedIds] = useState<string[]>([]);
+  const [challengeCopied, setChallengeCopied] = useState(false);
+  const [counterDraft, setCounterDraft] = useState<{
+    format: ChallengeFormat;
+    topicId: TopicKey;
+    seed: string;
+  } | null>(null);
 
   const completedNotifiedRef = useRef(false);
 
   const currentQuestion = questions[currentIndex];
 
   const topicTitle =
-    topicId !== undefined
-      ? OFFICIAL_TOPICS.find((t) => t.id === topicId)?.shortTitle ?? 'Entrenamiento'
-      : modeType === 'contrarreloj'
-        ? 'Contrarreloj 60s'
-        : modeType === 'cazaerror'
-          ? 'Caza el error de normativa'
-          : modeType === 'fallos'
-            ? 'Repaso Clínica de Fallos'
-            : 'Entrenamiento rápido';
+    challengeContext?.kind === 'accepting'
+      ? `Reto #${challengeContext.incoming.seed} · ${
+          CHALLENGE_FORMATS.find((f) => f.id === challengeContext.incoming.format)?.label ?? 'Duelo'
+        }`
+      : challengeContext?.kind === 'creating'
+        ? `Reto #${challengeContext.seed} · ${
+            CHALLENGE_FORMATS.find((f) => f.id === challengeContext.format)?.label ?? 'Duelo'
+          }`
+        : topicId !== undefined
+          ? OFFICIAL_TOPICS.find((t) => t.id === topicId)?.shortTitle ?? 'Entrenamiento'
+          : modeType === 'contrarreloj'
+            ? 'Contrarreloj 60s'
+            : modeType === 'cazaerror'
+              ? 'Caza el error de normativa'
+              : modeType === 'fallos'
+                ? 'Repaso Clínica de Fallos'
+                : 'Entrenamiento rápido';
+
+  // Track elapsed time across any quiz
+  useEffect(() => {
+    if (finished) return;
+    const interval = window.setInterval(() => {
+      setElapsedSeconds((s) => s + 1);
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [finished]);
 
   // Timer for 60s contrarreloj
   useEffect(() => {
@@ -93,10 +164,33 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
         correct: correctCount,
         total: modeType === 'contrarreloj' ? answeredCount : questions.length,
         xpEarned: sessionXp,
+        durationSeconds: Math.max(1, elapsedSeconds),
         topicId,
       });
+
+      // Prepare a fresh counter-challenge suggestion with a different format/seed
+      if (challengeContext) {
+        const prevFormat =
+          challengeContext.kind === 'accepting' ? challengeContext.incoming.format : challengeContext.format;
+        const prevTopic =
+          challengeContext.kind === 'accepting' ? challengeContext.incoming.topicId : challengeContext.topicId;
+        const prevSeed =
+          challengeContext.kind === 'accepting' ? challengeContext.incoming.seed : challengeContext.seed;
+        setCounterDraft(pickNextVariedChallenge(prevFormat, prevTopic, prevSeed));
+      }
     }
-  }, [finished, correctCount, answeredCount, questions.length, sessionXp, topicId, modeType, onSessionComplete]);
+  }, [
+    finished,
+    correctCount,
+    answeredCount,
+    questions.length,
+    sessionXp,
+    elapsedSeconds,
+    topicId,
+    modeType,
+    challengeContext,
+    onSessionComplete,
+  ]);
 
   const handleSelectAndCheck = (optionIdx: number) => {
     if (isSubmitted || finished || !currentQuestion) return;
@@ -122,7 +216,7 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
 
     onAnswerResult(currentQuestion, isCorrect, earned, modeType === 'fallos');
 
-    if (!isCorrect && !practiceNoHeartsLoss && modeType !== 'fallos') {
+    if (!isCorrect && !practiceNoHeartsLoss && modeType !== 'fallos' && !challengeContext) {
       const remainingHearts = hearts - 1;
       if (remainingHearts <= 0) {
         setOutOfHearts(true);
@@ -181,6 +275,57 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
   if (finished) {
     const totalEvaluated = modeType === 'contrarreloj' ? answeredCount : questions.length;
     const accuracy = totalEvaluated > 0 ? Math.round((correctCount / totalEvaluated) * 100) : 0;
+    const safeElapsed = Math.max(1, elapsedSeconds);
+
+    // Build shareable URL when creating a challenge with recorded score
+    const createdChallengeUrl =
+      challengeContext?.kind === 'creating'
+        ? encodeChallengeUrl({
+            mode: 'ruta',
+            seed: challengeContext.seed,
+            format: challengeContext.format,
+            specialty: challengeContext.specialty,
+            topicId: challengeContext.topicId,
+            challengerName: challengeContext.playerName.trim() || 'Opositor/a',
+            challengerCorrect: correctCount,
+            challengerTotal: totalEvaluated,
+            challengerTimeSec: safeElapsed,
+            challengerXp: challengeContext.playerXp + sessionXp,
+            challengerStreak: challengeContext.playerStreak,
+          })
+        : null;
+
+    // Head-to-head outcome when accepting an incoming challenge
+    let h2hVerdict: 'win' | 'tie' | 'loss' | 'open' | null = null;
+    if (challengeContext?.kind === 'accepting') {
+      const oppCorrect = challengeContext.incoming.challengerCorrect;
+      const oppTime = challengeContext.incoming.challengerTimeSec;
+      if (oppCorrect === undefined) {
+        h2hVerdict = 'open';
+      } else if (correctCount > oppCorrect) {
+        h2hVerdict = 'win';
+      } else if (correctCount < oppCorrect) {
+        h2hVerdict = 'loss';
+      } else if (oppTime !== undefined) {
+        h2hVerdict = safeElapsed < oppTime ? 'win' : safeElapsed > oppTime ? 'loss' : 'tie';
+      } else {
+        h2hVerdict = 'tie';
+      }
+    }
+
+    const handleCopyChallengeUrl = async (urlToCopy: string) => {
+      try {
+        await navigator.clipboard.writeText(urlToCopy);
+      } catch {
+        // Fallback: readonly input is visible
+      }
+      setChallengeCopied(true);
+      window.setTimeout(() => setChallengeCopied(false), 2600);
+    };
+
+    const nextDraftMeta = counterDraft
+      ? CHALLENGE_FORMATS.find((f) => f.id === counterDraft.format)
+      : undefined;
 
     return (
       <div className="max-w-2xl mx-auto bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
@@ -189,12 +334,22 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
             <Trophy className="w-6 h-6" />
           </div>
           <h2 className="font-display text-2xl font-extrabold text-slate-900">
-            {outOfHearts ? 'Sesión detenida: sin vidas restantes' : '¡Sesión completada!'}
+            {outOfHearts
+              ? 'Sesión detenida: sin vidas restantes'
+              : challengeContext?.kind === 'accepting'
+                ? h2hVerdict === 'win'
+                  ? '¡Has ganado el reto!'
+                  : h2hVerdict === 'tie'
+                    ? '¡Empate exacto en el reto!'
+                    : h2hVerdict === 'loss'
+                      ? 'El retador mantiene su marca'
+                      : '¡Reto completado!'
+                : '¡Sesión completada!'}
           </h2>
           <p className="text-sm text-slate-600">
             {outOfHearts
               ? 'Puedes activar "Práctica libre" en la barra superior para entrenar sin perder corazones.'
-              : `${topicTitle} · Progreso guardado automáticamente en tu dispositivo.`}
+              : `${topicTitle} · Tiempo: ${formatMinutesSeconds(safeElapsed)}`}
           </p>
         </div>
 
@@ -210,10 +365,154 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Precisión</p>
-            <p className="font-display text-2xl font-extrabold text-slate-900 tabular-nums">{accuracy}%</p>
+            <p className="text-xs text-slate-500">Precisión / Tiempo</p>
+            <p className="font-display text-xl sm:text-2xl font-extrabold text-slate-900 tabular-nums">
+              {accuracy}% · {formatMinutesSeconds(safeElapsed)}
+            </p>
           </div>
         </div>
+
+        {/* Head-to-Head Comparison when accepting a friend's link */}
+        {challengeContext?.kind === 'accepting' && (
+          <div className="bg-[#F8FAFC] border border-slate-200 rounded-xl p-5 space-y-4">
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                <Swords className="w-4 h-4 text-[#1D4ED8]" />
+                Comparativa del duelo #{challengeContext.incoming.seed}
+              </span>
+              <span>Puesto: {challengeContext.incoming.specialty}</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-sm tabular-nums">
+              <div className="bg-white border border-slate-200 rounded-lg p-3.5 space-y-1">
+                <p className="text-xs font-medium text-slate-500">Tu marca</p>
+                <p className="font-display text-lg font-extrabold text-[#1D4ED8]">
+                  {correctCount}/{totalEvaluated} aciertos
+                </p>
+                <p className="text-xs text-slate-600">
+                  Tiempo: {formatMinutesSeconds(safeElapsed)} · {(correctCount * 0.6).toFixed(2)} pts
+                </p>
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-lg p-3.5 space-y-1">
+                <p className="text-xs font-medium text-slate-500">
+                  Retador ({challengeContext.incoming.challengerName})
+                </p>
+                {challengeContext.incoming.challengerCorrect !== undefined ? (
+                  <>
+                    <p className="font-display text-lg font-extrabold text-slate-900">
+                      {challengeContext.incoming.challengerCorrect}/
+                      {challengeContext.incoming.challengerTotal ?? totalEvaluated} aciertos
+                    </p>
+                    <p className="text-xs text-slate-600">
+                      {challengeContext.incoming.challengerTimeSec !== undefined
+                        ? `Tiempo: ${formatMinutesSeconds(challengeContext.incoming.challengerTimeSec)} · `
+                        : ''}
+                      {(challengeContext.incoming.challengerCorrect * 0.6).toFixed(2)} pts
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-600 pt-1">
+                    Enlace abierto sin marca previa. ¡Comparte tu resultado para retarle ahora!
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Return a brand new changing challenge! */}
+            {counterDraft && onLaunchCounterChallenge && (
+              <div className="pt-2 border-t border-slate-200 space-y-2.5">
+                <p className="text-xs text-slate-700">
+                  <strong>Siguiente prueba sugerida (cambiante):</strong>{' '}
+                  {nextDraftMeta?.label ?? counterDraft.format} · Semilla #{counterDraft.seed}
+                </p>
+                <div className="flex flex-wrap gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onLaunchCounterChallenge({
+                        format: counterDraft.format,
+                        topicId: counterDraft.format === 'duelo_tema' ? counterDraft.topicId : undefined,
+                        seed: counterDraft.seed,
+                        specialty: challengeContext.incoming.specialty,
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 text-xs sm:text-sm font-bold transition-colors"
+                  >
+                    <Shuffle className="w-4 h-4" />
+                    <span>Devolver nuevo reto (jugar nueva prueba)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCounterDraft(
+                        pickNextVariedChallenge(counterDraft.format, counterDraft.topicId, counterDraft.seed)
+                      )
+                    }
+                    className="px-3 py-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700"
+                  >
+                    Otra prueba
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Shareable Link Box when the Challenger just set their mark */}
+        {createdChallengeUrl && (
+          <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-5 space-y-3">
+            <div className="space-y-1">
+              <h3 className="font-display text-base font-bold text-slate-900">
+                ¡Marca registrada! Envía este enlace para que intenten superarte
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-700">
+                Quien abra este enlace jugará exactamente las mismas preguntas (semilla{' '}
+                <strong>#{challengeContext?.kind === 'creating' ? challengeContext.seed : ''}</strong>) e intentará
+                batir tus <strong>{correctCount}/{totalEvaluated}</strong> aciertos en{' '}
+                <strong className="tabular-nums">{formatMinutesSeconds(safeElapsed)}</strong>.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleCopyChallengeUrl(createdChallengeUrl)}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-[#1D4ED8] hover:bg-[#1E3A8A] text-white text-xs sm:text-sm font-semibold transition-colors"
+              >
+                {challengeCopied ? <Check className="w-4 h-4 text-amber-300" /> : <Copy className="w-4 h-4" />}
+                <span>{challengeCopied ? '¡Enlace del reto copiado!' : 'Copiar enlace con mi marca'}</span>
+              </button>
+
+              {counterDraft && onLaunchCounterChallenge && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onLaunchCounterChallenge({
+                      format: counterDraft.format,
+                      topicId: counterDraft.format === 'duelo_tema' ? counterDraft.topicId : undefined,
+                      seed: counterDraft.seed,
+                      specialty: challengeContext?.kind === 'creating' ? challengeContext.specialty : 'Todos',
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 text-xs sm:text-sm font-bold transition-colors"
+                >
+                  <Shuffle className="w-4 h-4" />
+                  <span>Crear otro reto distinto</span>
+                </button>
+              )}
+            </div>
+
+            <input
+              type="text"
+              readOnly
+              value={createdChallengeUrl}
+              onFocus={(e) => e.currentTarget.select()}
+              aria-label="Enlace de reto generado"
+              className="w-full text-[11px] font-mono text-slate-600 bg-white border border-blue-200 rounded-md px-2.5 py-1.5"
+            />
+          </div>
+        )}
 
         {missedIds.length > 0 && (
           <div className="bg-[#F8FAFC] border border-slate-200 rounded-lg p-4 flex flex-wrap items-center justify-between gap-3">
@@ -235,14 +534,16 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
         )}
 
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <button
-            type="button"
-            onClick={onRestart}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#1D4ED8] hover:bg-[#1E3A8A] text-white text-sm font-semibold transition-colors whitespace-nowrap"
-          >
-            <RotateCcw className="w-4 h-4" />
-            <span>Repetir reto</span>
-          </button>
+          {!challengeContext && (
+            <button
+              type="button"
+              onClick={onRestart}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#1D4ED8] hover:bg-[#1E3A8A] text-white text-sm font-semibold transition-colors whitespace-nowrap"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Repetir reto</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={onExit}
@@ -285,11 +586,13 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
         </div>
 
         <div className="flex items-center gap-3 text-xs font-semibold shrink-0 tabular-nums">
-          {modeType === 'contrarreloj' && (
+          {modeType === 'contrarreloj' ? (
             <span className={`inline-flex items-center gap-1 ${timeLeft <= 10 ? 'text-[#DC2626]' : 'text-[#D97706]'}`}>
               <Timer className="w-4 h-4" />
               {timeLeft}s
             </span>
+          ) : (
+            <span className="text-slate-500 hidden sm:inline">{formatMinutesSeconds(elapsedSeconds)}</span>
           )}
           {combo >= 2 && (
             <span className="inline-flex items-center gap-1 text-[#D97706]">
@@ -297,16 +600,18 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
               x{combo}
             </span>
           )}
-          <span className="inline-flex items-center gap-1 text-slate-700">
-            {practiceNoHeartsLoss ? (
-              <InfinityIcon className="w-4 h-4 text-[#059669]" />
-            ) : (
-              <>
-                <Heart className="w-4 h-4 text-[#DC2626] fill-[#DC2626]" />
-                {hearts}
-              </>
-            )}
-          </span>
+          {!challengeContext && (
+            <span className="inline-flex items-center gap-1 text-slate-700">
+              {practiceNoHeartsLoss ? (
+                <InfinityIcon className="w-4 h-4 text-[#059669]" />
+              ) : (
+                <>
+                  <Heart className="w-4 h-4 text-[#DC2626] fill-[#DC2626]" />
+                  {hearts}
+                </>
+              )}
+            </span>
+          )}
         </div>
       </div>
 

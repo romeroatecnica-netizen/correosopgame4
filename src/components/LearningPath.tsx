@@ -20,6 +20,7 @@ interface LearningPathProps {
   progress: UserProgress;
   onStartMinigame: (type: MinigameType, topicId?: TopicKey) => void;
   onGoToExam: () => void;
+  onOpenChallengeModal: () => void;
   onRestoreHearts: () => void;
 }
 
@@ -35,6 +36,7 @@ export const LearningPath: React.FC<LearningPathProps> = ({
   progress,
   onStartMinigame,
   onGoToExam,
+  onOpenChallengeModal,
   onRestoreHearts,
 }) => {
   const [duelTopicId, setDuelTopicId] = useState<TopicKey>(3);
@@ -78,6 +80,15 @@ export const LearningPath: React.FC<LearningPathProps> = ({
               >
                 <ClipboardCheck className="w-4 h-4" />
                 <span>Simulacro oficial 100+10</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenChallengeModal}
+                className="inline-flex items-center gap-2 px-4 py-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-semibold text-sm transition-colors whitespace-nowrap shrink-0"
+              >
+                <Swords className="w-4 h-4 text-[#1D4ED8]" />
+                <span>Retar por enlace</span>
               </button>
             </div>
           </div>

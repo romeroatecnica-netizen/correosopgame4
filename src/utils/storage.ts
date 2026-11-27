@@ -1,5 +1,12 @@
 import { CANONICAL_ORIGIN } from '../config/seo';
-import { MainMode, SharedChallenge, Specialty, TopicKey, UserProgress } from '../types/opgame';
+import {
+  ChallengeFormat,
+  MainMode,
+  SharedChallenge,
+  Specialty,
+  TopicKey,
+  UserProgress,
+} from '../types/opgame';
 
 const STORAGE_KEY = 'correos_opgame_iv_v1';
 
@@ -29,9 +36,11 @@ export function createInitialProgress(): UserProgress {
     practiceNoHeartsLoss: false,
     selectedSpecialty: 'Todos',
     meritEstimate: 18,
+    playerName: '',
     topics: {},
     mistakes: {},
     examHistory: [],
+    challengeHistory: [],
   };
 }
 
@@ -44,9 +53,11 @@ export function loadProgress(): UserProgress {
     const merged: UserProgress = {
       ...base,
       ...parsed,
+      playerName: typeof parsed.playerName === 'string' ? parsed.playerName : '',
       topics: parsed.topics ?? {},
       mistakes: parsed.mistakes ?? {},
       examHistory: Array.isArray(parsed.examHistory) ? parsed.examHistory : [],
+      challengeHistory: Array.isArray(parsed.challengeHistory) ? parsed.challengeHistory : [],
     };
     // Validate streak if more than 1 day has passed without activity
     const today = getTodayISO();
@@ -96,7 +107,7 @@ export function updateStreakOnActivity(prev: UserProgress): { streakDays: number
   return { streakDays: 1, lastActiveDate: today };
 }
 
-export function encodeChallengeUrl(challenge: SharedChallenge): string {
+export function encodeChallengeUrl(challenge: SharedChallenge, baseOrigin: string = CANONICAL_ORIGIN): string {
   const payload = JSON.stringify(challenge);
   const bytes = new TextEncoder().encode(payload);
   let binary = '';
@@ -104,7 +115,7 @@ export function encodeChallengeUrl(challenge: SharedChallenge): string {
     binary += String.fromCharCode(bytes[i]);
   }
   const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const url = new URL('/', CANONICAL_ORIGIN);
+  const url = new URL('/', baseOrigin);
   url.searchParams.set('reto', encoded);
   return url.toString();
 }
@@ -125,11 +136,24 @@ export function decodeChallengeFromUrl(): SharedChallenge | null {
     const parsed = JSON.parse(json) as Partial<SharedChallenge>;
     const validModes: MainMode[] = ['ruta', 'simulacro', 'temario', 'clinica'];
     const validSpecialties: Specialty[] = ['Todos', 'Reparto', 'Clasificación', 'Oficinas'];
-    if (!parsed.mode || !validModes.includes(parsed.mode)) return null;
+    const validFormats: ChallengeFormat[] = ['duelo_mixto', 'duelo_tema', 'contrarreloj', 'cazaerror', 'express25'];
+
+    const mode: MainMode = parsed.mode && validModes.includes(parsed.mode) ? parsed.mode : 'ruta';
+    const format: ChallengeFormat =
+      parsed.format && validFormats.includes(parsed.format) ? parsed.format : 'duelo_mixto';
+
     return {
-      mode: parsed.mode,
+      mode,
+      seed: typeof parsed.seed === 'string' && parsed.seed.length >= 4 ? parsed.seed : 'CORREO1',
+      format,
       specialty: parsed.specialty && validSpecialties.includes(parsed.specialty) ? parsed.specialty : 'Todos',
       topicId: parsed.topicId as TopicKey | undefined,
+      challengerName: typeof parsed.challengerName === 'string' && parsed.challengerName.trim()
+        ? parsed.challengerName.trim().slice(0, 30)
+        : 'Opositor/a',
+      challengerCorrect: typeof parsed.challengerCorrect === 'number' ? parsed.challengerCorrect : undefined,
+      challengerTotal: typeof parsed.challengerTotal === 'number' ? parsed.challengerTotal : undefined,
+      challengerTimeSec: typeof parsed.challengerTimeSec === 'number' ? parsed.challengerTimeSec : undefined,
       challengerXp: typeof parsed.challengerXp === 'number' ? parsed.challengerXp : 0,
       challengerStreak: typeof parsed.challengerStreak === 'number' ? parsed.challengerStreak : 0,
       challengerBestScore: typeof parsed.challengerBestScore === 'number' ? parsed.challengerBestScore : undefined,

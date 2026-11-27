@@ -64,6 +64,25 @@ export interface ExamHistoryItem {
   annulledUsed: number;
 }
 
+export type ChallengeFormat = 'duelo_mixto' | 'duelo_tema' | 'contrarreloj' | 'cazaerror' | 'express25';
+
+export interface ChallengeHistoryItem {
+  id: string;
+  date: string;
+  seed: string;
+  format: ChallengeFormat;
+  specialty: Specialty;
+  topicId?: TopicKey;
+  myCorrect: number;
+  myTotal: number;
+  myTimeSec: number;
+  opponentName?: string;
+  opponentCorrect?: number;
+  opponentTotal?: number;
+  opponentTimeSec?: number;
+  outcome: 'win' | 'tie' | 'loss' | 'sent';
+}
+
 export interface UserProgress {
   xp: number;
   streakDays: number;
@@ -72,15 +91,23 @@ export interface UserProgress {
   practiceNoHeartsLoss: boolean;
   selectedSpecialty: Specialty;
   meritEstimate: number; // 0 to 40
+  playerName: string;
   topics: Record<string, TopicProgress>;
   mistakes: Record<string, MistakeRecord>;
   examHistory: ExamHistoryItem[];
+  challengeHistory: ChallengeHistoryItem[];
 }
 
 export interface SharedChallenge {
   mode: MainMode;
+  seed: string;
+  format: ChallengeFormat;
   specialty: Specialty;
   topicId?: TopicKey;
+  challengerName: string;
+  challengerCorrect?: number;
+  challengerTotal?: number;
+  challengerTimeSec?: number;
   challengerXp: number;
   challengerStreak: number;
   challengerBestScore?: number;
